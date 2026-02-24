@@ -1,183 +1,118 @@
-const fs = require("fs");
-const config = require("./config.json");
-require("dotenv").config();
-const {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  PermissionsBitField,
-  Partials,
-} = require("discord.js");
+const { Client, GatewayIntentBits, Collection, EmbedBuilder, ActivityType } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+const config = require('./config');
+const Logger = require('./utils/logger');
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildPresences,
-  ],
-  partials: [Partials.GuildMember],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.DirectMessages
+    ]
 });
 
-client.once("ready", () => {
-  console.log("Bot is Ready!");
-  console.log("Code by Wick Studio");
-  console.log("discord.gg/wicks");
-});
+client.commands = new Collection();
 
-client.on("messageCreate", async (message) => {
-  if (!message.content.startsWith("!bc") || message.author.bot) return;
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
 
-  const allowedRoleId = config.allowedRoleId;
-  const member = message.guild.members.cache.get(message.author.id);
+for (const file of commandFiles) {
+    const filePath = path.join(commandsPath, file);
+    const command = require(filePath);
+    client.commands.set(command.name, command);
+    Logger.info(`Loaded command: ${command.name}`);
+}
 
-  if (!member.roles.cache.has(allowedRoleId)) {
-    return message.reply({
-      content: "ليس لديك صلاحية لاستخدام هذا الامر!",
-      ephemeral: true,
-    });
-  }
-
-  if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-    return message.reply({
-      content: "ليس لديك صلاحية لاستخدام هذا الامر!",
-      ephemeral: true,
-    });
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor("#0099ff")
-    .setTitle("لوحة تحكم البرودكاست")
-    .setImage(config.image)
-    .setDescription("الرجاء اختيار نوع الارسال للاعضاء.");
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("send_all")
-      .setLabel("ارسل للجميع")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId("send_online")
-      .setLabel("ارسل للمتصلين")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId("send_offline")
-      .setLabel("ارسل للغير المتصلين")
-      .setStyle(ButtonStyle.Danger),
-  );
-
-  await message.reply({
-    embeds: [embed],
-    components: [row],
-    ephemeral: true,
-  });
-});
-
-client.on("interactionCreate", async (interaction) => {
-  try {
-    if (interaction.isButton()) {
-      let customId;
-      if (interaction.customId === "send_all") {
-        customId = "modal_all";
-      } else if (interaction.customId === "send_online") {
-        customId = "modal_online";
-      } else if (interaction.customId === "send_offline") {
-        customId = "modal_offline";
-      }
-
-      const modal = new ModalBuilder()
-        .setCustomId(customId)
-        .setTitle("Type your message");
-
-      const messageInput = new TextInputBuilder()
-        .setCustomId("messageInput")
-        .setLabel("اكتب رسالتك هنا")
-        .setStyle(TextInputStyle.Paragraph);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
-
-      await interaction.showModal(modal);
+client.once('ready', () => {
+    Logger.success(`Bot is ready! Logged in as ${client.user.tag}`);
+    Logger.info(`Bot is in ${client.guilds.cache.size} servers`);
+    
+    const statusType = config.botStatus.type === 'STREAMING' ? ActivityType.Streaming :
+                      config.botStatus.type === 'PLAYING' ? ActivityType.Playing :
+                      config.botStatus.type === 'LISTENING' ? ActivityType.Listening :
+                      ActivityType.Watching;
+    
+    const activityOptions = {
+        type: statusType,
+        name: config.botStatus.name
+    };
+    
+    if (config.botStatus.type === 'STREAMING' && config.botStatus.url) {
+        activityOptions.url = config.botStatus.url;
     }
+    
+    client.user.setActivity(activityOptions);
+    Logger.info(`Bot status set to: ${config.botStatus.type} - ${config.botStatus.name}`);
+});
 
-    if (interaction.isModalSubmit()) {
-      const message = interaction.fields.getTextInputValue("messageInput");
-
-      const guild = interaction.guild;
-      if (!guild) return;
-
-      await interaction.deferReply({
-        ephemeral: true,
-      });
-      if (interaction.customId === "modal_all") {
-        const membersToSend = guild.members.cache.filter(
-          (member) => !member.user.bot
-        );
-        await Promise.all(
-          membersToSend.map(async (member) => {
-            try {
-              await member.send({ content: `${message}\n<@${member.user.id}>`, allowedMentions: { parse: ['users'] } });
-            } catch (error) {
-              console.error(`Error sending message to ${member.user.tag}:`, error);
-            }
-          })
-        );
-      } else if (interaction.customId === "modal_online") {
-        const onlineMembersToSend = guild.members.cache.filter(
-          (member) =>
-            !member.user.bot &&
-            member.presence &&
-            member.presence.status !== "offline"
-        );
-        await Promise.all(
-          onlineMembersToSend.map(async (member) => {
-            try {
-              await member.send({ content: `${message}\n<@${member.user.id}>`, allowedMentions: { parse: ['users'] } });
-            } catch (error) {
-              console.error(`Error sending message to ${member.user.tag}:`, error);
-            }
-          })
-        );
-      } else if (interaction.customId === "modal_offline") {
-        const offlineMembersToSend = guild.members.cache.filter(
-          (member) =>
-            !member.user.bot &&
-            (!member.presence || member.presence.status === "offline")
-        );
-        await Promise.all(
-          offlineMembersToSend.map(async (member) => {
-            try {
-              await member.send({ content: `${message}\n<@${member.user.id}>`, allowedMentions: { parse: ['users'] } });
-            } catch (error) {
-              console.error(`Error sending message to ${member.user.tag}:`, error);
-            }
-          })
-        );
-      }
-      await interaction.editReply({
-        content: "تم ارسال رسالتك الى الاعضاء بنجاح.",
-      });
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.content.startsWith(config.prefix)) return;
+    
+    const args = message.content.slice(config.prefix.length).trim().split(/ +/);
+    const commandName = args.shift().toLowerCase();
+    
+    const command = client.commands.get(commandName);
+    if (!command) return;
+    
+    try {
+        Logger.info(`${message.author.tag} used command: ${commandName}`);
+        await command.execute(message, args);
+    } catch (error) {
+        Logger.error(`Error executing command ${commandName}: ${error.message}`);
+        
+        const errorEmbed = new EmbedBuilder()
+            .setTitle('â Ø®Ø·Ø£ ÙÙ ØªÙÙÙØ° Ø§ÙØ£ÙØ±')
+            .setDescription('Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«ÙØ§Ø¡ ØªÙÙÙØ° Ø§ÙØ£ÙØ±. ÙØ±Ø¬Ù Ø§ÙÙØ­Ø§ÙÙØ© ÙØ±Ø© Ø£Ø®Ø±Ù.')
+            .setColor('#ff0000')
+            .setTimestamp();
+        
+        try {
+            await message.reply({ embeds: [errorEmbed] });
+        } catch (replyError) {
+            Logger.error(`Failed to send error message: ${replyError.message}`);
+        }
     }
-  } catch (error) {
-    console.error("Error in interactionCreate event:", error);
-  }
 });
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+client.on('error', (error) => {
+    Logger.error(`Discord client error: ${error.message}`);
 });
 
-client.once("ready", () => {
-  console.log("Bot is Ready!");
+client.on('warn', (warning) => {
+    Logger.warn(`Discord client warning: ${warning}`);
 });
 
-client.login(process.env.TOKEN);
+process.on('unhandledRejection', (error) => {
+    Logger.error(`Unhandled promise rejection: ${error.message}`);
+});
 
+process.on('uncaughtException', (error) => {
+    Logger.error(`Uncaught exception: ${error.message}`);
+    process.exit(1);
+});
 
+process.on('SIGINT', () => {
+    Logger.info('Received SIGINT, shutting down gracefully...');
+    client.destroy();
+    process.exit(0);
+});
 
+process.on('SIGTERM', () => {
+    Logger.info('Received SIGTERM, shutting down gracefully...');
+    client.destroy();
+    process.exit(0);
+});
+
+if (!config.token) {
+    Logger.error('Discord token not found! Please set DISCORD_TOKEN in .env file');
+    process.exit(1);
+}
+
+client.login(config.token).catch((error) => {
+    Logger.error(`Failed to login: ${error.message}`);
+    process.exit(1);
+});
